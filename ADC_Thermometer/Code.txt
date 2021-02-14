@@ -1,0 +1,216 @@
+/*******************************************************************************
+Company     : GIBZ
+Author      : Ioannis Christodoulakis IC
+						
+Project     : ADC_Thermometer
+Version     : 1.0
+Filename	: main.c
+Created		: 23.06.2018
+
+********************************************************************************
+Target Hardware		: ELOB_V1722
+Chip type			: ATmega2560
+CPU-Clock			: 16.0000 MHz (ext.)
+Program Memory		: 256 kByte
+Internal RAM		: 8 kByte
+EEPROM				: 4 kByte
+
+********************************************************************************
+Release Notes:
+Version Date		Author	Comment/Reason for change
+     
+
+*******************************************************************************/
+
+/*------------------ Definitionen für die Delayfunktion-----------------------*/
+#define F_CPU 16000000UL
+/* CPU-Clock muss vor der Einbindung von delay.h definiert werden, da dieser
+sonst bereits definiert wurde und darum nicht übernommen würde die
+Wartefunktionen werden mittels _delay_ms(), oder _delay_us() aufgerufen    */
+
+/******************************************************************************
+ INCLUDES
+*******************************************************************************/
+#include <avr/io.h>
+#include <avr/delay.h>              // Enthält _delay_ms() und _delay_us()
+#include <avr/interrupt.h>			// Enthält Interrupt-Funktionen
+#include "stdtype.h"
+#include "elob_hw_init.h" 
+
+/******************************************************************************
+ DEFINES
+*******************************************************************************/
+#define ASCII_0			0x30	//ASCII wert für Zahl 0
+#define DIVISOR_10		10	
+#define SCALE_FACTOR	4888 //scale factor in uV
+#define TEMP_MIN            -1000  //Unit: °C/100
+#define TEMP_MAX            9900  //Unit: °C/100
+
+/******************************************************************************
+ TYPEDEFS
+*******************************************************************************/
+
+/******************************************************************************
+ MACROS
+*******************************************************************************/
+
+/******************************************************************************
+ GLOBALS
+*******************************************************************************/
+UINT8 Vorzeichen = 0;
+UINT8 Zehntausender = 0;
+UINT8 Tausender = 0;
+UINT8 Hunderter = 0;
+UINT8 Zehner = 0;
+UINT8 Einer = 0;
+
+UINT32 ADC_Wert = 0;
+
+// NTC Temp table from -10°C to 99°C
+static const INT16 NTC_TEMP_TABLE[110] ={
+	176, 184, 192, 200, 208, 216, 224, 233, 242, 250,
+	260, 269, 278, 287, 297, 307, 317, 326, 336, 347,
+	357, 367, 377, 387, 398, 408, 419, 429, 439, 450,
+	460, 470, 481, 491, 501, 511, 521, 531, 541, 551,
+	561, 570, 580, 589, 599, 608, 617, 626, 635, 643,
+	652, 660, 668, 676, 684, 692, 700, 708, 715, 722,
+	729, 736, 743, 750, 756, 763, 769, 775, 781, 787,
+	792, 798, 804, 809, 814, 819, 824, 829, 834, 838,
+	843, 847, 851, 855, 859, 863, 867, 871, 875, 878,
+	882, 885, 888, 891, 895, 898, 901, 903, 906, 909,
+	912, 914, 917, 919, 922, 924, 926, 928, 931, 933
+};
+
+
+/******************************************************************************
+ FUNCTIONS
+*******************************************************************************/
+void dez_to_ascii(INT16 Data){
+
+	INT16 Divisor = DIVISOR_10;
+	INT8 NegPosKorrektur = 1;
+	
+	if (Data < 0){
+		
+		Vorzeichen = '-'; // ASCII 0x2D "-"
+		Divisor *= -1;
+		NegPosKorrektur = -1;
+		
+	}//if negativ
+	else{
+		
+		Vorzeichen = '+'; // ASCII 0x2B "+"
+		
+	}//else positiv
+	
+	Einer = (Data % Divisor)*NegPosKorrektur + ASCII_0;
+	
+	Data /=DIVISOR_10;
+	
+	Zehner = (Data % Divisor)*NegPosKorrektur + ASCII_0;
+	
+	Data /=DIVISOR_10;
+	
+	Hunderter = (Data % Divisor)*NegPosKorrektur + ASCII_0;
+	
+	Data /=DIVISOR_10;
+
+	Tausender = (Data % Divisor)*NegPosKorrektur + ASCII_0;
+	
+	Data /=DIVISOR_10;
+
+	Zehntausender = (Data % Divisor)*NegPosKorrektur + ASCII_0;
+	
+}//dez_to_ascii
+			
+
+/******************************************************************************
+ MAIN ROUTINE WITH ENDLESS LOOP
+*******************************************************************************/
+int main(void) {
+	//UINT32 ADC_Wert_mV = 0;
+	UINT32  AnalogValue = 0;
+	UINT32  ReferenceValue = 0;
+	UINT8   Temp_Counter = 0;
+	UINT16  Temp_Interpolation;
+	INT16   Temperature;
+	UINT8   ADC_Channel = 0;
+	UINT16  NewDACValue;
+	
+	//init of the hardware of the ELOB-Board	
+	elob_hw_init();
+	
+	sei(); // set interrupt active
+	
+    // main loop
+    while (1) {	
+		
+		    //Reset Temp_Counter		
+			Temp_Counter = 0;
+			
+			//Get new ADC-Value
+			ADCSRA |= (1 << ADSC); //start conversion
+			
+	
+			//1s Delay
+			_delay_ms(500);
+			
+			//1LSB --> 0.004887585532746823069403714565V nominal --> (Wert x 4888) / 1000 --> mV
+			
+			
+			//Voltmeter
+			//ADC_Wert_mV = (UINT32)(ADC_Wert * SCALE_FACTOR);
+			//ADC_Wert_mV /= 1000;
+			
+			//Temperature
+			 //find the temp. value for this adc-value
+			 while (NTC_TEMP_TABLE[Temp_Counter] < ADC_Wert){
+				 Temp_Counter++;
+			 }
+			 Temp_Counter--;
+			 
+			 //linear temp interpolation
+			 Temp_Interpolation = ((ADC_Wert - NTC_TEMP_TABLE[Temp_Counter])*100)/(NTC_TEMP_TABLE[Temp_Counter+1]- NTC_TEMP_TABLE[Temp_Counter]);
+			 
+			 //calculate an round the temperature to centi-grade celsius
+			 Temperature = (Temp_Counter*100 + TEMP_MIN + Temp_Interpolation);// + 5) / 10 ) *10;
+	
+			
+			//ASCII Umwandlung
+			dez_to_ascii(Temperature);
+			
+			//UART Uebertragung
+			while ( !( UCSR1A & (1<<UDRE1)) ); // warten auf leeren  transmit buffer
+			UDR1 = Tausender;
+			while ( !( UCSR1A & (1<<UDRE1)) ); // warten auf leeren  transmit buffer
+			UDR1 = Hunderter;
+			while ( !( UCSR1A & (1<<UDRE1)) ); // warten auf leeren  transmit buffer
+			UDR1 = Zehner;
+			while ( !( UCSR1A & (1<<UDRE1)) ); // warten auf leeren  transmit buffer
+			UDR1 = Einer;
+			while ( !( UCSR1A & (1<<UDRE1)) ); // warten auf leeren  transmit buffer
+			UDR1 = 'm';
+			while ( !( UCSR1A & (1<<UDRE1)) ); // warten auf leeren  transmit buffer
+			UDR1 = 'V';
+			
+			//LED = ADC_Wert_mV;
+		
+    }//while (main loop)
+	
+}//main
+
+
+
+/******************************************************************************
+ INTERRUP SERVICE ROUTINES
+*******************************************************************************/
+
+// Interrupt Service Routine ISR fuer den ADC complete conversion interrupt
+ISR(ADC_vect){
+		
+		ADC_Wert = ADCW; //read ADC value
+		
+}//ISR TIMER5_COMPA_vect
+
+
+//EOF
